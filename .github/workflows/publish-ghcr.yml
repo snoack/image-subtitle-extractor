@@ -1,0 +1,79 @@
+name: Publish Docker Image
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  # Rebuilt twice a month even without a commit, so the image picks up fixes
+  # to its base image and to the packages installed on top of it. The same
+  # dates in every repo, so images sharing a base pull the same version of it.
+  schedule:
+    - cron: '17 7 1,15 * *'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-ghcr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # GitHub disables a public repository's scheduled workflows after 60 days
+  # without activity, which is exactly when the scheduled rebuild matters.
+  # Re-enabling the workflow from its own scheduled run keeps it alive.
+  keepalive:
+    if: github.repository == 'snoack/image-subtitle-extractor' && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Keep the schedule enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/$GITHUB_REPOSITORY/actions/workflows/publish-ghcr.yml/enable"
+
+  publish:
+    if: github.repository == 'snoack/image-subtitle-extractor'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/snoack/image-subtitle-extractor
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # A rebuild without a commit is for the updates the cache would
+          # otherwise hide: an unchanged base would reuse the apt layer.
+          no-cache: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}

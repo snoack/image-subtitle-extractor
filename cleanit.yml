@@ -1,0 +1,49 @@
+# Added to cleanit's own rules (tag default), for how subtile-ocr misreads a
+# lone capital I in subtitle fonts. Measured on Fringe (VobSub) and The Last
+# Kingdom (PGS): without these, 100+ such errors in three episodes.
+#
+# The first two take the place of cleanit's rules of the same name: their
+# patterns replace cleanit's.
+
+templates:
+  - &ocr
+    tags:
+      - ocr
+      - minimal
+      - default
+    priority: 9000
+    languages: en
+
+rules:
+  # Any of / | ! [ ] for a lone I: "| will", "...| will", "-] prefer", "!'m",
+  # "! saw that.". cleanit's has only / and |, and not after - or ...
+  replace-|/-to-I-character[ocr:en]:
+    <<: *ocr
+    patterns: '(?P<x>^|\s|-|"|\.\.\.)[/|!\[\]](?P<y>t?\W|$)'
+    replacement: '\g<x>I\g<y>'
+
+  # A lone 1 before a word that follows I, not a number: "1 think",
+  # "...1 like", but "press 1 now".
+  replace-1-to-I-character[ocr:en]:
+    <<: *ocr
+    patterns: '(?P<x>^|\s|-|"|\.\.\.)1(?P<y>\s+(?:ha(?:d|ve)n?|d(?:o|id)n?|won|will|can|(?:sh|w|c)ouldn?|am|was|think|thought|know|knew|just|want|wanted|need|needed|mean|meant|guess|like|liked|love|loved|said|saw|told|got|feel|felt|believe|hope|must|might|never|really|owe|deserve|mention|only|also|still|swear|promise|understand|remember|see|found|made|tried|wish|asked|heard|came|went|took|gave|let|kind|already|always|actually)\b)'
+    replacement: '\g<x>I\g<y>'
+
+  # "I! already know"
+  replace-I-exclamation-before-word[ocr:en]:
+    <<: *ocr
+    patterns: '\bI!(?P<y>\s+[a-z])'
+    replacement: 'I\g<y>'
+
+  # "I| just said"
+  replace-I-bar[ocr:en]:
+    <<: *ocr
+    patterns: '\bI\|'
+    replacement: 'I'
+
+  # l for I in words that are not English otherwise
+  replace-l-words-to-I[ocr:en]:
+    <<: *ocr
+    patterns:
+      - '\bl(?P<x>t|s|f|n)\b'
+    replacement: 'I\g<x>'
