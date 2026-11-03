@@ -25,8 +25,11 @@ capital I.
   while it waits keeps its place, so one written over and over cannot hold up
   the others.
 - An `.srt` it wrote carries the `user.image-subtitle-extractor.source` xattr.
-  Only those are ever rewritten (when the video changes) or removed (when the
-  changed video needs none). A video with captions of its own that minidlna
+  Only those are ever rewritten or removed (when the changed video needs
+  none). They are rewritten when the video changes, and after an update of
+  what decides their text: the cleanit rules, cleanit, subtile-ocr or
+  Tesseract and its English data. An `.srt` that comes out the same is left
+  as it is. A video with captions of its own that minidlna
   would serve, `<video>.srt` or `<video>.smi`, is skipped and those stay as
   they are. Renaming or deleting a video leaves its `.srt` behind; a renamed
   video gets a new one. Delete one of ours to have it written again.

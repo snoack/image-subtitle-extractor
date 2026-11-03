@@ -8,6 +8,8 @@ says when an .srt is written, rewritten or left alone.
 """
 
 import collections
+import hashlib
+import importlib.metadata
 import logging
 import os
 import signal
@@ -41,6 +43,10 @@ TIMEOUT = 3600
 # for parenthesis would keep cleanit from finding "(sighs)" and removing it.
 OCR_BLACKLIST = "`_~{}"
 
+# The Debian packages that decide the OCR's text, besides cleanit and its rules.
+# PyAV and mkvextract only copy the track, so they are not among them.
+OCR_PACKAGES = ("subtile-ocr", "libtesseract*", f"tesseract-ocr-{LANGUAGE}")
+
 # IN_MOVED_FROM and IN_MOVE_SELF are only for pyinotify, which needs them to
 # keep the paths of watches on moved directories right.
 MASK = (pyinotify.IN_CLOSE_WRITE | pyinotify.IN_MOVED_TO | pyinotify.IN_MOVED_FROM
@@ -72,8 +78,23 @@ def other_captions(video):
                for suffix in CAPTION_SUFFIXES)
 
 
-def stamp(st):
-    return f"{st.st_size}:{st.st_mtime_ns}"
+def stamp(st, version):
+    return f"{st.st_size}:{st.st_mtime_ns}:{version}"
+
+
+def output_version():
+    """A hash of what decides an .srt's text, so a change to it rewrites them."""
+    r = subprocess.run(["dpkg-query", "-W", "-f", "${Package} ${Version}\n", *OCR_PACKAGES],
+                       capture_output=True, text=True)
+    if r.returncode:
+        sys.exit(f"dpkg-query: {last_line(r.stderr)}")
+    with open(CLEANIT_CONFIG, "rb") as f:
+        rules = f.read()
+    h = hashlib.sha256()
+    for part in (r.stdout.encode(), importlib.metadata.version("cleanit").encode(),
+                 rules, LANGUAGE.encode(), OCR_BLACKLIST.encode()):
+        h.update(len(part).to_bytes(8, "big") + part)
+    return h.hexdigest()[:16]
 
 
 def our_stamp(path):
@@ -249,13 +270,30 @@ def remove_sidecar(video):
         log.warning("cannot remove %s: %s", srt, exc)
 
 
-def write_sidecar(video, st, data):
+def unchanged(srt, data):
+    """Whether srt is ours and already says data."""
+    if our_stamp(srt) is None:
+        return False
+    try:
+        with open(srt, "rb") as f:
+            return f.read() == data
+    except OSError:
+        return False
+
+
+def write_sidecar(video, source, data):
     srt = sidecar(video)
+    # After an update that left this .srt as it was, only the stamp is new, and
+    # minidlna sees no change.
+    if unchanged(srt, data):
+        os.setxattr(srt, SOURCE_XATTR, source.encode())
+        log.info("%s is up to date", srt)
+        return False
     # Not .srt, so minidlna ignores it until the rename.
     tmp = os.path.join(os.path.dirname(srt), "." + os.path.basename(srt) + ".tmp")
     with open(tmp, "wb") as f:
         f.write(data)
-    os.setxattr(tmp, SOURCE_XATTR, stamp(st).encode())
+    os.setxattr(tmp, SOURCE_XATTR, source.encode())
     # Some may have arrived with the torrent while the OCR ran.
     if other_captions(video):
         os.unlink(tmp)
@@ -264,7 +302,7 @@ def write_sidecar(video, st, data):
     return True
 
 
-def process(video, rules):
+def process(video, rules, version):
     try:
         st = os.stat(video)
     except FileNotFoundError:
@@ -275,7 +313,8 @@ def process(video, rules):
     if other_captions(video):
         return
     srt = sidecar(video)
-    if our_stamp(srt) == stamp(st):
+    source = stamp(st, version)
+    if our_stamp(srt) == source:
         return
 
     started = time.monotonic()
@@ -283,7 +322,7 @@ def process(video, rules):
         data = ocr(video, *image_track(video), rules)
         # If the video changed during the OCR, the .srt is stamped with the old
         # size and mtime, and the queued close_write writes it again.
-        written = write_sidecar(video, st, data)
+        written = write_sidecar(video, source, data)
     except Skip as skip:
         remove_sidecar(video)
         log.info("skipping %s: %s", video, skip)
@@ -315,8 +354,10 @@ def main():
     if not os.path.isfile(CLEANIT_CONFIG):
         sys.exit(f"no such file: {CLEANIT_CONFIG}")
     rules = cleanit.Config.from_path(CLEANIT_CONFIG).select_rules(tags={"default"})
+    version = output_version()
 
     logging.basicConfig(format="%(message)s", level=logging.INFO, stream=sys.stdout)
+    log.info("output version %s", version)
     # As a container's PID 1 SIGTERM would be ignored. Exiting from Python
     # rather than dying of it also kills a running OCR tool (subprocess.run
     # does on any exception) and removes its scratch directory.
@@ -344,7 +385,7 @@ def main():
             watch(wm)
             full_scan(work)
         if work.videos:
-            process(work.pop(), rules)
+            process(work.pop(), rules, version)
 
 
 if __name__ == "__main__":
