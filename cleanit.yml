@@ -1,9 +1,14 @@
-# Added to cleanit's own rules (tag default), for how subtile-ocr misreads a
-# lone capital I in subtitle fonts. Measured on Fringe (VobSub) and The Last
-# Kingdom (PGS): without these, 100+ such errors in three episodes.
+# Added to cleanit's own rules (tag default), for how subtile-ocr misreads
+# subtitle fonts: mostly a capital I, which is a bare stroke, and italics.
+# Measured on DVD (VobSub) and Blu-ray (PGS) subtitles.
 #
-# The first two take the place of cleanit's rules of the same name: their
-# patterns replace cleanit's.
+# Three rules have the name of one of cleanit's: what they set is merged into
+# cleanit's rule, so their patterns replace its patterns, and the two ocr ones
+# move from priority 10000 to 9000.
+#
+# cleanit tries the rules highest priority first, and after any change starts
+# over from the top, so a rule at 9100 sees a line before those at 9000. Its
+# own rules turn ‘ and ’ into ' before any of these run.
 
 templates:
   - &ocr
@@ -19,31 +24,115 @@ rules:
   # "! saw that.". cleanit's has only / and |, and not after - or ...
   replace-|/-to-I-character[ocr:en]:
     <<: *ocr
-    patterns: '(?P<x>^|\s|-|"|\.\.\.)[/|!\[\]](?P<y>t?\W|$)'
+    patterns: '(?P<x>^|[\s"-]|\.\.\.)[/|!\[\]](?P<y>t?\W|$)'
     replacement: '\g<x>I\g<y>'
 
   # A lone 1 before a word that follows I, not a number: "1 think",
   # "...1 like", but "press 1 now".
   replace-1-to-I-character[ocr:en]:
     <<: *ocr
-    patterns: '(?P<x>^|\s|-|"|\.\.\.)1(?P<y>\s+(?:ha(?:d|ve)n?|d(?:o|id)n?|won|will|can|(?:sh|w|c)ouldn?|am|was|think|thought|know|knew|just|want|wanted|need|needed|mean|meant|guess|like|liked|love|loved|said|saw|told|got|feel|felt|believe|hope|must|might|never|really|owe|deserve|mention|only|also|still|swear|promise|understand|remember|see|found|made|tried|wish|asked|heard|came|went|took|gave|let|kind|already|always|actually)\b)'
+    patterns: '(?P<x>^|[\s"-]|\.\.\.)1(?P<y>\s+(?:ha(?:d|ve)n?|d(?:o|id)n?|won|will|can|(?:sh|w|c)ouldn?|am|was|think|thought|know|knew|just|want|wanted|need|needed|mean|meant|guess|like|liked|love|loved|said|saw|told|got|feel|felt|believe|hope|must|might|never|really|owe|deserve|mention|only|also|still|swear|promise|understand|remember|see|found|made|tried|wish|asked|heard|came|went|took|gave|let|kind|already|always|actually)\b)'
     replacement: '\g<x>I\g<y>'
 
-  # "I! already know"
-  replace-I-exclamation-before-word[ocr:en]:
-    <<: *ocr
-    patterns: '\bI!(?P<y>\s+[a-z])'
-    replacement: 'I\g<y>'
+  # cleanit's took any line starting with no lowercase letters before a colon
+  # for a speaker's name: "3:45 flight to ..." became "- 45 flight to ...".
+  # A name has a letter in it, and is on the line it names: in "NO!" over
+  # "JOHN: Go away." the first line stays.
+  replace-character-name-with-dash[no-sdh]:
+    patterns: '^(?=[^[:lower:]:\n]*[[:upper:]])[^[:lower:]\n]+:\s*(?P<y>.*[[:lower:]].*)$'
 
-  # "I| just said"
-  replace-I-bar[ocr:en]:
+  # A stroke stuck to an I: "I| just said", "I! already know"
+  drop-stroke-after-I[ocr:en]:
     <<: *ocr
-    patterns: '\bI\|'
+    patterns: '\bI(?:\||!(?=\s+[a-z]))'
     replacement: 'I'
 
-  # l for I in words that are not English otherwise
+  # l for I in words that are not English otherwise, also after a quote:
+  # "'lf you", where the rule below must not touch "we'll"
   replace-l-words-to-I[ocr:en]:
     <<: *ocr
+    patterns: '\bl(?=[fnst]\b)'
+    replacement: 'I'
+
+  # l for I at the start of a word, before a consonant other than l or y,
+  # which no English word starts with: "lron", "lmages"
+  replace-l-start-consonant-to-I[ocr:en]:
+    <<: *ocr
+    patterns: '(?<![\w''/|])l(?=[bcdfghjkmnpqrstvwxz])'
+    replacement: 'I'
+
+  # A stroke or 1 run into am, was, do or did after I: "1am", "|was", "|do".
+  # Before any other word it is as likely an l ("/ast", "/ooks"). Before the
+  # 1 rule below, which would make "1was" "Iwas".
+  replace-stroke-joined-to-I[ocr:en]:
+    <<: *ocr
+    priority: 9100
+    patterns: '(?<![\w''/|])[/|1](?=(?:am|was|do|did)\b)'
+    replacement: 'I '
+
+  # / or | for I in In, If, Is, It: "/n time", "/s she okay?"
+  replace-stroke-to-I-in-two-letter-word[ocr:en]:
+    <<: *ocr
+    patterns: '(?<![\w''/|])[/|](?=[nfst]\b)'
+    replacement: 'I'
+
+  # After "...", a sentence goes on in lowercase: "...1S" is "...is".
+  replace-ellipsis-1S-to-is[ocr:en]:
+    <<: *ocr
+    patterns: '(?<=\.\.\.)1S\b'
+    replacement: 'is'
+
+  replace-ellipsis-1N-to-in[ocr:en]:
+    <<: *ocr
+    patterns: '(?<=\.\.\.)1N\b'
+    replacement: 'in'
+
+  replace-ellipsis-1-to-i[ocr:en]:
+    <<: *ocr
+    patterns: '(?<=\.\.\.)1(?=[fnst]\b)'
+    replacement: 'i'
+
+  # 1 for I at the start of a word: "1t". Not 1st, 1s, 1pm, 1x, not inside a
+  # number (49.1kg, $1M), and not "1IS".
+  replace-1-start-to-I[ocr:en]:
+    <<: *ocr
+    patterns: '(?<![\w''$/|.,:])1(?=[A-Za-z])(?!I|(?:st|nd|rd|th|s|pm|[AP]M|[xX])\b)'
+    replacement: 'I'
+
+  # is misread as Is in mid-sentence, after a lowercase word or a comma on the
+  # same line or the line before ("the curse Is lifted", "the formula itself
+  # / Is deceiving"), but not in a title ("This Is Us"); or as ts ("Destiny ts
+  # all"). Other capital I-words there are mostly names.
+  replace-Is-ts-to-is[ocr:en]:
+    <<: *ocr
     patterns:
-      - '\bl(?P<x>t|s|f|n)\b'
-    replacement: 'I\g<x>'
+      - '(?<=[a-z,][ \n])Is\b(?!\s+[A-Z])'
+      - '\bts\b'
+    replacement: 'is'
+
+  # 7 for T at the start of a word: "7he", "7hat", "7o", "7oday".
+  # Not 7am, 7in, 7hr, 7hp, 7oz, 7rpm.
+  replace-7-start-to-T[ocr:en]:
+    <<: *ocr
+    patterns: '(?<![\w''$.,:])7(?=[hrw][aeiouy]|[aeiou][a-z]{2}|o\b)'
+    replacement: 'T'
+
+  # " for ' inside a word: "doesn"t", "father"s". A quote with a space or
+  # punctuation on either side is a real one: He said "Hello", and left.
+  replace-quote-inside-word-to-apostrophe[ocr:en]:
+    <<: *ocr
+    patterns: '\b"\b'
+    replacement: ''''
+
+  # An apostrophe lost in a contraction: "dont", "havent". Not "cant" or
+  # "wont", which are words.
+  replace-contraction-missing-apostrophe[ocr:en]:
+    <<: *ocr
+    patterns: '\b(?P<x>[Dd](?:o|oes|id)|[Hh]a(?:ve|s|d)|[Aa]re|[Ii]s|[Ww](?:as|ere)|(?:[CcWw]|[Ss]h)ould)nt\b'
+    replacement: '\g<x>n''t'
+
+  # Tesseract's English data has no à: "déja vu", "Deja vu"
+  replace-deja-vu-accents[ocr:en]:
+    <<: *ocr
+    patterns: '\b(?P<x>[Dd])[ée]ja(?=\s+vu\b)'
+    replacement: '\g<x>éjà'
