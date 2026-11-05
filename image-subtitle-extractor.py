@@ -83,16 +83,18 @@ def stamp(st, version):
 
 
 def output_version():
-    """A hash of what decides an .srt's text, so a change to it rewrites them."""
+    """A hash of what decides an .srt's text and timing, so a change to it
+    rewrites them: the OCR packages, cleanit and its rules, and this script."""
     r = subprocess.run(["dpkg-query", "-W", "-f", "${Package} ${Version}\n", *OCR_PACKAGES],
                        capture_output=True, text=True)
     if r.returncode:
         sys.exit(f"dpkg-query: {last_line(r.stderr)}")
-    with open(CLEANIT_CONFIG, "rb") as f:
-        rules = f.read()
     h = hashlib.sha256()
-    for part in (r.stdout.encode(), importlib.metadata.version("cleanit").encode(),
-                 rules, LANGUAGE.encode(), OCR_BLACKLIST.encode()):
+    parts = [r.stdout.encode(), importlib.metadata.version("cleanit").encode()]
+    for path in (CLEANIT_CONFIG, __file__):
+        with open(path, "rb") as f:
+            parts.append(f.read())
+    for part in parts:
         h.update(len(part).to_bytes(8, "big") + part)
     return h.hexdigest()[:16]
 
@@ -177,12 +179,62 @@ def extract(video, index, dest):
         raise ConvertError(f"cannot extract stream {index}: {exc}") from exc
 
 
+PGS_PCS = 0x16
+PGS_END = 0x80
+PGS_ACQUISITION = 0x40
+
+
+def drop_repeats(sup):
+    """Remove the PGS display sets that only repeat the subtitle on screen.
+
+    Discs repeat it now and then (acquisition points, for players joining
+    mid-stream). subtile-ocr takes every other display set for a subtitle's
+    start and the one after for its end, so one repeat puts it off by one:
+    every subtitle after it is shown for a frame, just before its time.
+    """
+    with open(sup, "rb") as f:
+        data = f.read()
+    out, display_set = bytearray(), bytearray()
+    showing = repeat = False
+    dropped = 0
+    i = 0
+    while i < len(data):
+        # A segment: "PG", two timestamps, type, size, data. Anything else is
+        # left for subtile-ocr to make of.
+        if data[i:i + 2] != b"PG" or i + 13 > len(data):
+            return
+        kind = data[i + 10]
+        end = i + 13 + int.from_bytes(data[i + 11:i + 13], "big")
+        if end > len(data):
+            return
+        segment = data[i:end]
+        i = end
+        if kind == PGS_PCS:
+            # Composition state at byte 7 of its data, number of objects at 10.
+            if len(segment) < 24:
+                return
+            repeat = showing and segment[13 + 7] == PGS_ACQUISITION
+            showing = segment[13 + 10] > 0
+        display_set += segment
+        if kind == PGS_END:
+            if repeat:
+                dropped += 1
+            else:
+                out += display_set
+            display_set.clear()
+            repeat = False
+    if dropped:
+        with open(sup, "wb") as f:
+            f.write(out + display_set)
+
+
 def ocr(video, index, codec, rules):
     """The cleaned .srt of the video's track. Raises Skip if it has no text."""
     with tempfile.TemporaryDirectory(prefix="image-subtitle-extractor-") as tmp:
         track = os.path.join(tmp, "track")
         if codec == "pgssub":
             extract(video, index, track + ".sup")
+            drop_repeats(track + ".sup")
             ocr_input = track + ".sup"
         else:
             # FFmpeg cannot write idx/sub, so the track goes through Matroska.
